@@ -30,6 +30,7 @@ public:
 		force = pData.force;
 		Fx = pData.Fx;
 		Fy = pData.Fy;
+		contours = pData.contours;
 		// 处理链式赋值
 		return *this;
 	}

@@ -11,7 +11,7 @@ include_directories( ${OpenCV_INCLUDE_DIRS} )
 ###############
 
 # COMPILE EXAMPLES
-add_executable( detect FootDetection.cpp)
+add_executable( detect main.cpp)
 ################
 ###   LINK   ###
 ################

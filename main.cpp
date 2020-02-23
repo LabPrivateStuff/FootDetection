@@ -8,13 +8,8 @@
 using namespace std;
 using namespace cv;
 
-// 比较两个
-bool compareContourX(std::vector<cv::Point> contour1, std::vector<cv::Point> contour2) {
-	int x1 = (cv::boundingRect(cv::Mat(contour1)).br()+ cv::boundingRect(cv::Mat(contour1)).tl()).x/2;
-	int x2 = (cv::boundingRect(cv::Mat(contour2)).br() + cv::boundingRect(cv::Mat(contour2)).tl()).x / 2;
-	return (x1 < x2); // 左的在前
-}
 // 压力数据类，用于存放压力数据
+// 这个类相比发给你们的做了一些改动
 class PressureData
 {
 public:
@@ -34,11 +29,11 @@ public:
 		Fx = pData.Fx;
 		Fy = pData.Fy;
 		contours = pData.contours;
-		// 处理链式赋值
+		// 处理链式赋值： data1 = data2 = data3
 		return *this;
 	}
 	// 用友元函数交换两个对象的数值，注意使用了引用参数
-	friend void swap(PressureData& p1, PressureData& p2)
+	inline friend void swap(PressureData& p1, PressureData& p2)
 	{
 		swap(p1.Mx, p2.Mx);
 		swap(p1.My, p2.My);
@@ -48,12 +43,12 @@ public:
 		swap(p1.contours, p2.contours);
 	}
 	// 输出数据
-	void printData()
+	inline void printData()
 	{
 		printf("Mx: %f\tMy: %f\t Force: %f\tFx: %f\tFy: %f\n", Mx, My, force, Fx, Fy);
 	}
 	// 用于清空数据
-	void clear()
+	inline void clear()
 	{
 		Mx = My = force = Fx = Fy = -1;
 		contours.clear();
@@ -63,14 +58,14 @@ PressureData::PressureData()
 {
 	// -1表示无意义、不存在
 	Mx = My = force = Fx = Fy = -1;
-	
 }
 PressureData::PressureData(double _Mx, double _My, double _force)
 {
 	Mx = _Mx;
 	My = _My;
 	force = _force;
-	// 压力中心的位置即力矩处以力的大小
+	// 压力中心的位置其实就是力臂
+	// 即力矩除以力的大小
 	Fx = Mx / _force;
 	Fy = My / _force;
 }
@@ -107,6 +102,9 @@ int main()
 	Mat frame;
 	int delay = 1000/30;
 	namedWindow("Frame", cv::WINDOW_NORMAL);
+	/*
+		下面的窗口展示了处理的中间过程
+	*/
 	// namedWindow("Binary", cv::WINDOW_NORMAL);
 	// namedWindow("leftMask", cv::WINDOW_NORMAL);
 	// namedWindow("rightMask", cv::WINDOW_NORMAL);
@@ -114,8 +112,8 @@ int main()
 	// namedWindow("right", cv::WINDOW_NORMAL);
 	
 	// 创建一个结构，用于之后的膨胀操作
-	Mat dilateEle = getStructuringElement(cv::MORPH_DILATE, cv::Size(5, 19));
-	// 分别存放左、右教的数据
+	Mat dilateEle = getStructuringElement(cv::MORPH_DILATE, cv::Size(5, 15));
+	// 分别存放左、右脚的数据
 	PressureData lData;
 	PressureData rData;
 	while (true)
@@ -124,12 +122,12 @@ int main()
 		cap >> frame;
 		if (frame.empty()) break;
 		Mat grey;
+		Mat binary;
 		// 如果你想让图像看上去亮一些，取消下一行的注释
 		// frame *= 10;
 		// 下面这一行在原图像的头顶和左侧各添加一排数据，你也可以不添加
 		// copyMakeBorder(frame, frame, 1, 0, 1, 0, BORDER_CONSTANT, Scalar(0));
-		if (frame.channels() == 3) cvtColor(frame, grey, COLOR_BGR2GRAY);
-		Mat binary;
+		cvtColor(frame, grey, COLOR_BGR2GRAY);
 		threshold(grey, binary, 0, 255, THRESH_BINARY);
 		// 请思考一下膨胀的作用
 		dilate(binary, binary, dilateEle, Point(-1,-1), 1);
@@ -147,47 +145,35 @@ int main()
 			saver.save(lData, rData);
 			continue;
 		}
-		
+		// leftMask 是掩模
 		Mat leftMask = Mat::zeros(Size(frame.cols, frame.rows), CV_8UC1);
-		Mat rightMask = Mat::zeros(Size(frame.cols, frame.rows), CV_8UC1);
 		Mat left = Mat::zeros(Size(frame.cols, frame.rows), CV_8UC1);
-		Mat right = Mat::zeros(Size(frame.cols, frame.rows), CV_8UC1);
 		
 		if (contours.size() == 1)
 		{
 			// 如只有一个轮廓，说明只检测到一只脚
 			Rect r = boundingRect(Mat(contours[0]));
 			Point center = (r.br()+r.tl())/2; // 获取外接矩形的中心
-			if (frame.cols/2 < center.x)
-			{
-				// 如果中心在图右侧，有可能是左脚
-				// 画轮廓，其中-1参数表示把轮廓里面画满，即将脚型填充为白色
-				drawContours(leftMask, contours, -1, Scalar(255), -1); 
-				// 利用掩模操作，将轮廓内的数据复制到left，而其他部分不复制
-				grey.copyTo(left, leftMask);
-				// 现在left图像内，只有单只脚
-				// 利用矩这个类，获取力矩
-				Moments lM = moments(left);
-				// 注意这个构造函数可以由力矩和力求得力臂的大小（即压力中心的位置）
-				lData = PressureData(lM.m10, lM.m01, sum(left)[0]);
-				lData.contours = contours;
-				// 再检查一次有无错误
-				if (lData.Fx < frame.cols/2) swap(lData, rData);
-			}
-			else
-			{
-				// 如果中心在图左侧，有可能是右脚
-				drawContours(rightMask, contours, -1, Scalar(255), -1);
-				grey.copyTo(right, rightMask);
-				Moments rM = moments(right);
-				rData = PressureData(rM.m10, rM.m01, sum(right)[0]);
-				rData.contours = contours;
-				if (frame.cols / 2 < rData.Fx) swap(lData, rData);
-			}
+			
+			// 暂时假定检测到的是左脚
+			// 画轮廓，其中-1参数表示把轮廓里面画满，即将脚型填充为白色
+			drawContours(leftMask, contours, -1, Scalar(255), -1); 
+			// 利用掩模操作，将轮廓内的数据复制到left，而其他部分不复制
+			grey.copyTo(left, leftMask);
+			// 现在left图像内，只有单只脚
+			// 利用矩这个类，获取力矩
+			Moments lM = moments(left);
+			// 注意这个构造函数可以由力矩和力求得力臂的大小（即压力中心的位置）
+			lData = PressureData(lM.m10, lM.m01, sum(left)[0]);
+			lData.contours = contours;
+			// 再检查一次有无错误
+			if (lData.Fx < frame.cols/2) swap(lData, rData);
 		}
 		else if(contours.size() == 2)
 		{
-			// std::sort(contours.begin(), contours.end(), compareContourX);
+			// 直到确有必要时，才创建对象，节约内存、时间
+			Mat rightMask = Mat::zeros(Size(frame.cols, frame.rows), CV_8UC1);
+			Mat right = Mat::zeros(Size(frame.cols, frame.rows), CV_8UC1);
 			leftContour.push_back(contours[1]);
 			rightContour.push_back(contours[0]);
 			drawContours(leftMask, leftContour, -1, Scalar(255), -1);
@@ -198,16 +184,11 @@ int main()
 			lData = PressureData(lM.m10, lM.m01, sum(left)[0]);
 			Moments rM = moments(right);
 			rData = PressureData(rM.m10, rM.m01, sum(right)[0]);
+			
 			lData.contours = leftContour;
 			rData.contours = rightContour;
 			if (lData.Fx < rData.Fx) swap(lData, rData);
-				
-		}
-		else
-		{
-			cerr<<"More than 2 feet were detected !"<<endl;
-		}
-		
+		}		
 		// 有则画出框来
 		if (0 < lData.force)
 		{
@@ -222,7 +203,6 @@ int main()
 		cout << "Right" << endl;
 		rData.printData();
 		imshow("Frame", frame);
-		writer << frame;
 		// imshow("Binary", binary);
 		// imshow("leftMask", leftMask);
 		// imshow("rightMask", rightMask);
@@ -230,11 +210,12 @@ int main()
 		// imshow("right", right);
 		auto end = std::chrono::high_resolution_clock::now();
 		std::chrono::duration<double> time = end - start;
-		std::cout << "Time on export gait data: " << time.count() << std::endl;
+		std::cout << "Time in milliseconds: " << time.count()*1000 << std::endl;
 		saver.save(lData, rData);
+		writer << frame;
 		lData.clear();
 		rData.clear();
-		if (waitKey(delay) == 27) break;
+		if (waitKey(delay) == 27) break; // 按下Esc可以结束运行
 	}
 	return 0;
 }
